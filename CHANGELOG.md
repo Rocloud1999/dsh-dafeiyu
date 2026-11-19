@@ -2,6 +2,19 @@
 
 > This is release history. For installation, use the [latest stable release](https://github.com/QCYTSN/dsh-dafeiyu/releases/latest), not commands from older entries.
 
+## 0.2.0 · 2026-11-19
+
+### Added
+
+- Rotate the status-bubble footer through the DeepSeek balance and the Zhipu
+  BigModel GLM Coding Plan quotas: the 5-hour and weekly remaining percentages
+  take turns with the money balance every 10 seconds. The Zhipu key is the one
+  DSH already stores for the `zai-coding-cn` provider route; the plugin
+  queries `GET /api/monitor/usage/quota/limit` directly and adds no extra
+  credential. The new `zhipuQuotaEnabled` setting (default on) turns the
+  quota part off independently, and the plugin settings page gains a Zhipu
+  table with remaining/used/reset-time per window.
+
 ## 0.1.23 · 2026-10-29
 
 ### Fixed

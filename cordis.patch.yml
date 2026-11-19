@@ -21,3 +21,4 @@
         clientTarget: auto
         balanceEnabled: true
         balanceSource: auto
+        zhipuQuotaEnabled: true

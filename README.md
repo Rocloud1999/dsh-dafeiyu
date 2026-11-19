@@ -110,23 +110,25 @@ dsh plugin --profile desktop add "C:\Downloads\dsh-dafeiyu-0.1.23.tgz"
 
 ## 余额显示
 
-余额默认出现在**大肥鱼状态气泡底部和设置页**，查询逻辑由两个客户端共用。设置页可查看总余额、赠送和充值，并手动刷新。
+余额与额度默认出现在**大肥鱼状态气泡底部和设置页**，查询逻辑由两个客户端共用。气泡底部每 10 秒轮换显示一项：DeepSeek 余额 → 智谱 5 小时剩余额度 → 智谱周剩余额度；设置页可查看总余额、赠送和充值、智谱各窗口剩余／已用／重置时间，并手动刷新。
 
 | 来源 | 凭据来自哪里 | 查询内容 |
 | --- | --- | --- |
 | 自动（默认） | 优先使用 DSH 模型设置中的 DeepSeek API Key；未配置时尝试已登录账户 | 对应来源的余额 |
 | API Key | DSH 的凭据服务；旧 Host 无该服务时读取启动环境 | DeepSeek `/user/balance` |
 | 已登录账户 | DSH 的 DeepSeek 账户服务 | 账户充值与赠送钱包 |
+| 智谱 Coding Plan | DSH 模型设置里 `zai-coding-cn` 路由的 API Key（`ZAI_CODING_CN_API_KEY` 等） | BigModel `/api/monitor/usage/quota/limit` 的 5 小时／周限额 |
 
 - 在 **DSH 模型／账户设置**中配置凭据；大肥鱼设置页不需要再填写 API Key。
 - API 余额与账户余额分别标明来源；CNY / USD 分别显示。
 - 每分钟自动刷新，同一 Host 内共享缓存；手动刷新最快每 5 秒一次。
 - 服务失败时保留上次成功结果，并标明“上次查询”；未配置、授权失败和网络失败分别提示。
 - 自定义网关需要实现相同的 `/user/balance` 接口；不支持时显示查询失败。
+- 智谱额度接口的返回百分比按“已用”解释，剩余 = 100 − 已用；与 ZCode 的接入方式一致（`authorization` 头直接携带完整 Key）。
 - API Key、登录凭据和上游原始错误不会进入余额页面、角色消息或事件流。
-- 没有余额凭据也能正常显示任务状态；可关闭“显示 DeepSeek 余额”。
+- 没有余额凭据也能正常显示任务状态；可分别关闭“显示 DeepSeek 余额”与“显示智谱额度”。
 
-账户余额和 API 余额的查询方式参考了 [keshing/balance-display](https://github.com/keshing/balance-display) 与 DSH 的公开账户服务。插件不会发起模型调用。
+账户余额和 API 余额的查询方式参考了 [keshing/balance-display](https://github.com/keshing/balance-display) 与 DSH 的公开账户服务；智谱额度参考了 [zai-org/zcode](https://github.com/zai-org/zcode) 的 Coding Plan 用量接入文档。插件不会发起模型调用。
 
 ## 常用设置
 

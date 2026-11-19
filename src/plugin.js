@@ -11,6 +11,7 @@ import { createUserSettingsStore, defaultUserSettingsPath } from './user-setting
 import { resolveClientTarget } from './client-target.js'
 import { isLocalRequest, jsonResponse } from './local-http.js'
 import { BALANCE_ENDPOINT, createBalanceQuery, createBalanceMonitor, createBalanceHandler, balanceProviderNamespace } from './balance.js'
+import { createZhipuQuotaQuery, createZhipuQuotaMonitor, zhipuQuotaLines, zhipuProviderNamespace } from './zhipu-quota.js'
 import {
   CompanionMessageKind,
   CompanionState,
@@ -61,6 +62,7 @@ export const Config = Schema.object({
   clientTarget: Schema.union(['auto', 'web', 'desktop']).default('auto').description('打开 DSH 的目标客户端（自动识别 WebUI／桌面端）'),
   balanceEnabled: Schema.boolean().default(true).description('在状态气泡和设置页显示 DeepSeek 余额'),
   balanceSource: Schema.union(['auto', 'api-key', 'account']).default('auto').description('余额来源：自动优先 API Key，也可选择已登录账户'),
+  zhipuQuotaEnabled: Schema.boolean().default(true).description('在状态气泡和设置页显示智谱 Coding Plan 的 5 小时／周剩余额度'),
 }).description('由 DeepSeek Harness 状态驱动的桌面大肥鱼伴侣')
 
 // Mark fields, rather than the root object: current DSH passes each volatile
@@ -82,6 +84,7 @@ const defaults = Object.freeze({
   clientTarget: 'auto',
   balanceEnabled: true,
   balanceSource: 'auto',
+  zhipuQuotaEnabled: true,
 })
 
 const SOUND_STATES = new Set(['SUCCESS', 'ERROR', 'APPROVAL'])
@@ -107,6 +110,7 @@ function publicConfig(config = {}) {
     clientTarget: config.clientTarget ?? defaults.clientTarget,
     balanceEnabled: config.balanceEnabled !== false,
     balanceSource: config.balanceSource ?? defaults.balanceSource,
+    zhipuQuotaEnabled: config.zhipuQuotaEnabled !== false,
   }
 }
 
@@ -337,14 +341,64 @@ function mountCompanion(ctx, config = {}, eventCtx = ctx, logger) {
   let bridge
   let reducer
   let restartTimer
+  const zhipu = createZhipuQuotaMonitor({
+    query: createZhipuQuotaQuery(ctx),
+    onChange() { publishStatus() },
+  })
   const balance = createBalanceMonitor({
     query: createBalanceQuery(ctx),
-    onChange(snapshot) {
-      const message = createMessage(CompanionMessageKind.BALANCE, snapshot)
-      if (bridge) bridge.send(message)
-      else eventStream.broadcast(message)
-    },
+    onChange() { publishStatus() },
   })
+
+  // The bubble footer shows one line at a time, so the DeepSeek balance and
+  // the Zhipu Coding Plan windows take turns on a slow carousel. Both
+  // monitors' data ride the same BALANCE message (the pet only renders
+  // `summary`; the settings panel reads `balances` and `zhipu`).
+  const ROTATE_INTERVAL_MS = 10000
+  let rotateIndex = 0
+  let rotationTimer
+  const statusLines = () => {
+    const lines = []
+    const balanceSnapshot = balance.get()
+    if (balanceSnapshot.status !== 'disabled' && balanceSnapshot.summary) lines.push(balanceSnapshot.summary)
+    lines.push(...zhipuQuotaLines(zhipu.get()).map((line) => line.text))
+    return lines
+  }
+  const balanceMessage = () => {
+    const lines = statusLines()
+    let summary = ''
+    if (lines.length > 1) {
+      rotateIndex %= lines.length
+      summary = lines[rotateIndex]
+    } else if (lines.length === 1) {
+      summary = lines[0]
+    } else {
+      summary = balance.get().status !== 'disabled' ? balance.get().summary : ''
+    }
+    return createMessage(CompanionMessageKind.BALANCE, { ...balance.get(), zhipu: zhipu.get(), summary })
+  }
+  const publishStatus = () => {
+    const message = balanceMessage()
+    if (bridge) bridge.send(message)
+    else eventStream.broadcast(message)
+  }
+  const tickRotation = () => {
+    rotationTimer = undefined
+    try {
+      if (settings.get().enabled !== false && statusLines().length >= 2) {
+        rotateIndex += 1
+        publishStatus()
+      }
+    } catch (error) {
+      logger.warn?.(`dsh-dafeiyu failed to rotate status footer: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    scheduleRotation()
+  }
+  const scheduleRotation = () => {
+    clearTimeout(rotationTimer)
+    rotationTimer = setTimeout(tickRotation, ROTATE_INTERVAL_MS)
+    rotationTimer.unref?.()
+  }
 
   const stopRuntime = (reason = 'settings-change') => {
     bridge?.stop(reason)
@@ -482,12 +536,14 @@ function mountCompanion(ctx, config = {}, eventCtx = ctx, logger) {
       message: '我在这儿等新任务哦',
       detail: 'DSH · 等待下一次任务',
     }))
-    if (balance.get().status !== 'disabled') bridge.send(createMessage(CompanionMessageKind.BALANCE, balance.get()))
+    if (balance.get().status !== 'disabled' || zhipu.get().status !== 'disabled') bridge.send(balanceMessage())
     logger.info?.('dsh-dafeiyu companion bridge started')
   }
 
   startRuntime(settings.get())
   balance.configure(settings.get().enabled !== false && settings.get().balanceEnabled, settings.get().balanceSource)
+  zhipu.configure(settings.get().enabled !== false && settings.get().zhipuQuotaEnabled !== false)
+  scheduleRotation()
 
   // The companion intentionally observes every DSH session. Loader entries may
   // live inside a scoped composition, so use the unscoped root bus and dispose
@@ -520,6 +576,7 @@ function mountCompanion(ctx, config = {}, eventCtx = ctx, logger) {
     // to avoid spawning repeatedly while settings settle.
     try {
       balance.configure(next.enabled !== false && next.balanceEnabled, next.balanceSource)
+      zhipu.configure(next.enabled !== false && next.zhipuQuotaEnabled !== false)
       if (next.enabled === false) {
         if (restartTimer) {
           clearTimeout(restartTimer)
@@ -546,13 +603,16 @@ function mountCompanion(ctx, config = {}, eventCtx = ctx, logger) {
   // A credential or account change invalidates the old display immediately.
   const refreshBalance = () => {
     const next = settings.get()
-    balance.configure(next.enabled !== false && next.balanceEnabled, next.balanceSource, true)
+    const active = next.enabled !== false
+    balance.configure(active && next.balanceEnabled !== false, next.balanceSource, true)
+    zhipu.configure(active && next.zhipuQuotaEnabled !== false, true)
   }
   const offCredential = eventCtx.on('credentials/reference-updated', refreshBalance, { global: true })
   const offAccount = eventCtx.on('deepseek-account/signed-out', refreshBalance, { global: true })
   const offAccountCredential = eventCtx.on('credentials/record-updated', refreshBalance, { global: true })
   const offProvider = eventCtx.on('settings/document-updated', (ns) => {
-    if (['llm-deepseek', 'llm-deepseek-api-key', balanceProviderNamespace(ctx)].includes(ns)) refreshBalance()
+    if (['llm-deepseek', 'llm-deepseek-api-key', balanceProviderNamespace(ctx), zhipuProviderNamespace(ctx)]
+      .filter(Boolean).includes(ns)) refreshBalance()
   }, { global: true })
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (httpCtx) => {
@@ -565,7 +625,7 @@ function mountCompanion(ctx, config = {}, eventCtx = ctx, logger) {
         'dsh-dafeiyu: local event stream',
       )
       httpCtx.effect(
-        () => httpCtx.webServer.register({ kind: 'exact', path: BALANCE_ENDPOINT, handler: createBalanceHandler(balance) }),
+        () => httpCtx.webServer.register({ kind: 'exact', path: BALANCE_ENDPOINT, handler: createBalanceHandler(balance, () => balanceMessage()) }),
         'dsh-dafeiyu: local balance endpoint',
       )
       const assetRoutes = createAssetRoutes()
@@ -584,6 +644,8 @@ function mountCompanion(ctx, config = {}, eventCtx = ctx, logger) {
   ctx.effect(() => () => {
     if (restartTimer) clearTimeout(restartTimer)
     restartTimer = undefined
+    if (rotationTimer) clearTimeout(rotationTimer)
+    rotationTimer = undefined
     offEvent?.()
     offDisposed?.()
     offCredential?.()
@@ -593,6 +655,7 @@ function mountCompanion(ctx, config = {}, eventCtx = ctx, logger) {
     unwatch()
     settings.dispose?.()
     balance.stop()
+    zhipu.stop()
     stopRuntime('dsh-host-stop')
   })
 }

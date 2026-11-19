@@ -245,10 +245,11 @@ export function createBalanceMonitor({ query, onChange = () => {}, now = Date.no
   }
 }
 
-export function createBalanceHandler(monitor) {
+export function createBalanceHandler(monitor, compose = (snapshot) => snapshot) {
   return async (req, res) => {
     if (!isLocalRequest(req)) return jsonResponse(res, 403, { error: 'local access only' })
     if (!['GET', 'POST'].includes(req.method)) return jsonResponse(res, 405, { error: 'method not allowed' })
-    jsonResponse(res, 200, await monitor.refresh(req.method === 'POST'))
+    const snapshot = await monitor.refresh(req.method === 'POST')
+    jsonResponse(res, 200, compose(snapshot))
   }
 }

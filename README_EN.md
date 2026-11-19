@@ -110,19 +110,20 @@ Desktop also accepts the full `.tgz` path in its **Add plugin** field.
 
 ## Balance display
 
-Balance appears in the native status card footer and the settings page. The settings page shows total, granted, and topped-up amounts, plus manual refresh. Both clients share the Host's query and cache.
+Balance and quota appear in the native status card footer and the settings page. The footer rotates every 10 seconds between the DeepSeek balance, the Zhipu GLM Coding Plan 5-hour remaining quota, and its weekly remaining quota. The settings page shows total, granted, and topped-up amounts, the Zhipu per-window remaining/used/reset times, plus manual refresh. Both clients share the Host's query and cache.
 
 | Source | Credentials | Query |
 | --- | --- | --- |
 | Auto, default | DSH's DeepSeek API key first; signed-in account if no key is configured | The selected source's balance |
 | API key | DSH credentials service; launch environment on older Hosts without that service | DeepSeek `/user/balance` |
 | Signed-in account | DSH's DeepSeek account service | Recharge and bonus wallets |
+| Zhipu Coding Plan | The API key of DSH's `zai-coding-cn` provider route (`ZAI_CODING_CN_API_KEY` etc.) | BigModel `/api/monitor/usage/quota/limit`, 5-hour and weekly windows |
 
 Configure credentials in DSH's model or account settings; BigFish does not ask for another API key. API and account balances are labeled separately, as are CNY and USD. Queries run once per minute, share a cache within one Host, and limit manual refresh to once every five seconds.
 
-A failed refresh retains the last successful result and marks it as stale. Missing credentials, authorization failures, and service failures have distinct messages. Custom API gateways must implement the same balance endpoint. Keys, login credentials, and raw upstream errors never enter the balance UI or companion event stream. Task display works without balance credentials, and balance display can be disabled.
+A failed refresh retains the last successful result and marks it as stale. Missing credentials, authorization failures, and service failures have distinct messages. Custom API gateways must implement the same balance endpoint. The Zhipu endpoint's percentages are interpreted as used, remaining = 100 − used, matching ZCode's integration (the `authorization` header carries the raw key). Keys, login credentials, and raw upstream errors never enter the balance UI or companion event stream. Task display works without balance credentials, and the DeepSeek balance and Zhipu quota displays can be disabled separately.
 
-Implementation references include [keshing/balance-display](https://github.com/keshing/balance-display) and DSH's public account service. Balance queries do not invoke a model.
+Implementation references include [keshing/balance-display](https://github.com/keshing/balance-display), DSH's public account service, and [zai-org/zcode](https://github.com/zai-org/zcode)'s Coding Plan quota integration doc. Queries do not invoke a model.
 
 ## Settings
 
